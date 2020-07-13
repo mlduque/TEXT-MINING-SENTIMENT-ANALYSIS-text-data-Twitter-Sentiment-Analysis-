@@ -1,3 +1,5 @@
+TEXT MINING AND SENTIMENT ANALYSIS (text data, Twitter Sentiment Analysis)
+
 Objetive/purpose:
 
 Access to text data, ETL, make wordclouds, sentiment analysis Twitter, Text Mining in general on
