@@ -1,0 +1,466 @@
+---
+title:    "Text Mining: Extración de información de documentos PDF"
+author:   "by [María Luisa Duque](https://www.linkedin.com/in/marialuisaduque/)"
+mail:     "marialdu@ucm.es"
+linkedin: "marialuisaduque"
+github:   "mlduque"
+date:     "`r Sys.Date()`"
+license:  by-nc-sa
+urlcolor: blue
+output:
+  html_document: 
+    theme:        cosmo # "default", "cerulean", "journal", "flatly", "readable", "spacelab", "united", "cosmo", "lumen", "paper", "sandstone", "simplex", "yeti"
+    highlight:    tango # "default", "tango", "pygments", "kate", "monochrome", "espresso", "zenburn", "haddock", "textmate"
+    toc:          TRUE
+    toc_float:    TRUE
+    code_folding: show
+    includes:
+      after_body: footer.html
+  pdf_document:   default
+  epuRate::epurate:
+    number_sections: FALSE
+    code_folding:    "show"
+    toc:          TRUE 
+    word_document:  default
+  rmdformats::readthedown:
+    toc:          TRUE 
+    toc_float:    TRUE     
+---
+  
+
+## Extraer información de documentos con formato pdf
+  
+El objetivo de la presente tarea consiste en acceder a un web, descargar un pdf y hacer un análisis de texto sobre tal documento.
+
+El documento objetivo es el Real Decreto 463/2020, del 14 de marzo, publicado en el Boletín Oficial del Estado (BOE) por el que se declara el Estado de Alarma para la gestión de la situación de crisis sanitaria ocasionada por el COVID-19.
+
+### Tribunal Constitucional
+
+Vamos a obtener el documento a través de la website del Boletín Oficial del Estado [BOE](https://www.boe.es/).
+
+Descargamos el documento: 
+
+```{r}
+download.file('https://www.boe.es/boe/dias/2020/03/14/pdfs/BOE-A-2020-3692.pdf', 'RD463_2020.pdf', mode="wb")
+```
+
+El documento descargado lo podemos ver en el directorio de trabajo (RD_463/2020.pdf)
+
+```{r, eval=FALSE}
+list.files()
+```
+
+
+### Análisis de documento
+
+Usamos la librería **tm** para leer directamente el pdf con la función **readPDF**.
+  
+```{r}
+# Cargamos librerías
+library(tm)
+library(dplyr)
+library(tidyr)
+library(tm)
+library(wordcloud)
+library(ggplot2)
+
+# Nombre del archivo
+filename = "RD463_2020.pdf"
+
+# Lectura del archivo pdf
+pdf_doc <- readPDF(control=list(text='-enc "UTF-8"'))(elem = list(uri = filename), 
+                                                  language="es")
+```
+
+Analizamos el objeto pdf.
+
+La clase:
+
+```{r}
+class(pdf_doc)
+```
+
+Las variables:
+
+```{r}
+names(pdf_doc)
+```
+
+Los metadatos:
+
+```{r}
+pdf_doc$meta
+```
+
+Las tres primeras líneas:
+
+```{r}
+head(pdf_doc$content, 3)
+```
+
+La longitud del texto:
+
+```{r}
+length(pdf_doc$content)
+```
+
+El contenido, como un conjunto de lineas de texto, se extrae con la función **content()**. En las lineas aparecen caracteres especiales, muchas en blanco y otros elementos que sera necesario filtrar como parte del procesamiento.
+
+Extraemos el texto, pasando de un objeto "PlainTextDocument" a un objeto "character".
+
+```{r}
+pdf_texto <- content(pdf_doc)
+```
+
+Examinamos el objeto **pdf_texto**.
+  
+```{r}
+str(pdf_texto)
+```
+
+
+### ETL: Extract, Transform and Load
+
+Realizamos un procedimiento de ETL sobre nuestro objeto.
+
+Eliminamos las líneas vacías:
+
+```{r}
+pdf_texto <- pdf_texto[pdf_texto != ""]
+str(pdf_texto)
+```
+
+No parece que existan caracteres especiales en nuestro texto.
+
+Podríamos los números con la función **gsub**; sin embargo, al tratarse de un texto del BOE consideramos que los números es mejor mantenerlos ya que pueden ser fechas o datos de importancia numérica contextual.
+
+```{r}
+#pdf_texto <- gsub("[0-9]*", "", pdf_texto)
+#str(pdf_texto)
+```
+
+Convertimos todas las mayúsculas en minúsculas:
+
+```{r}
+pdf_texto <- gsub(pattern = '([[:upper:]])', perl = TRUE, replacement = '\\L\\1', pdf_texto)
+```
+
+Eliminamos las comas:
+
+```{r}
+pdf_texto <- gsub(",", "", pdf_texto)
+```
+
+También se podría hacer, de una forma más rápida, definiendo una función como la siguiente:
+
+```{r}
+# Defino una funcion para ir filtrando texto
+clean.text <- function(x= "Texto Nulo"){
+  x <- gsub("(<[^>]*>)", "", x)             # Quitamos el codigo html de los links
+  x <- gsub("(\n)", "", x)                  # Quitamos los saltos de linea \n
+  x <- gsub("(&#[0-9]*;)", "", x)           # Quitamos simbolos de puntuacion,superindices, etc
+}
+```
+
+Definimos una función para eliminar los acentos:
+
+```{r}
+acentos.text <- function(x="Texto Nulo"){
+  # Quito todos los acento para tener menos dificultades con la nube de palabras
+  # Cambio la ñ porque de problemas en la nube
+  x <- gsub("á", "a", x)
+  x <- gsub("é", "e", x)
+  x <- gsub("í", "i", x)
+  x <- gsub("ó", "o", x)
+  x <- gsub("ú", "u", x)
+  x <- gsub("ñ", "n", x)
+}
+```
+
+Aplicamos nuestra flución sobre pdf_texto.
+
+```{r}
+pdf_texto <- clean.text(pdf_texto)
+pdf_texto <- acentos.text(pdf_texto)
+```
+
+Ahora podemos buscar dentro del texto usando la función **grep**, por ejemplo la palabra alamar o covid.
+
+```{r}
+index_alarma <- grep("\\Walarma\\W", pdf_texto, ignore.case = TRUE, perl = TRUE)
+head(pdf_texto[index_alarma], 3) # Solo los tres primeros
+```
+
+Hemos creado un objeto, index_alarma, que apunta a las líneas donde aparece la palabra alarma.
+
+```{r}
+index_alarma # Apunta a los elementos en los que aparece la palabra alarma
+```
+
+Busquemos en qué elementos aparece la palabra covid.
+
+```{r}
+index_covid <- grep("\\Wcovid\\W", pdf_texto, ignore.case = TRUE, perl = TRUE)
+index_covid # Apunta a los elementos en los que aparece la palabra covid
+```
+
+### Corpus
+
+Es necesario crear un corpus de **tm** para poder lematizar y realizar otras operaciones de minería de texto, para ello usamos la función **Corpus**:
+  
+```{r}
+corpus <- Corpus(VectorSource(pdf_texto), readerControl = list(language = "es"))
+corpus
+```
+
+Quitamos los espacios en blanco:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, stripWhitespace)
+```
+
+Quitamos las stopwords en español:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeWords, stopwords('es'))
+```
+
+Quitamos el resto de signos de puntuación que queden, con la opción **removePuntuation**:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removePunctuation)
+```
+
+Quitamos la preposición 'tras' no incluida como stopword:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeWords, "tras") 
+```
+
+### Nube de palabras: WordCloud
+
+```{r, warning=FALSE}
+library(wordcloud)
+```
+
+Nos quedamos con las palabras que aparecen, al menos 10 veces.
+
+```{r, fig.align="center", warning=FALSE}
+wordcloud(corpus, min.freq = 10, random.order = FALSE)
+```
+
+Parece que la salida es óptima y satisfactoria.
+
+### Matriz DTM (Documen Term Matrix)
+
+Ahora vamos a crear una matriz DTM (document-term matrix). Básicamente son matrices en las que se representan los términos que aparecen en un determinado documento y con qué frecuencia.
+
+Por otro lado, encontramos también las TDM (term-document matrix), que a diferencia de la anteriores, se usan para buscar en qué documentos aparece un determinado término
+
+```{r}
+pdf_dtm <- DocumentTermMatrix(corpus)
+pdf_dtm
+```
+
+Las variables del objeto **pdf_dtm**.
+  
+```{r}
+names(pdf_dtm)
+```
+
+Las dimensiones:
+
+```{r}
+pdf_dtm$nrow
+pdf_dtm$ncol
+```
+
+* Los documentos (11), aparecen cómo **Docs** y cómo filas **nrow**
+* Los términos (1087), aparecen cómo **Terms** y cómo columnas **ncol**
+  
+
+Es decir, tras la pequeña limpieza de los términos tenemos una matriz DTM de 11 elementos (Docs) y 1087 términos (Terms) distintos
+
+
+### Palabras frecuentes: Wordcloud, matrices DTM y TMD
+
+La lista de términos con una frecuencia mínima de 10. En esta ocasión vamos a usar la función **findFreqTerms** del paquete **tm**.
+  
+```{r}
+findFreqTerms(pdf_dtm, 10)
+```
+
+También podríamos quitar los números con **tm_map** haciendo uso de corpus del siguiente modo, como hemos mencionado anteriormente, los datos numéricos nos pueden resultar significativos en importancia dado el carácter documento aquí tratado; sin embargo, vamos a optar por eliminarlos ahora.
+
+```{r, warning=FALSE}
+corpus_clean <- tm_map(corpus, removeNumbers)
+```
+
+Inspeccinamos:
+
+```{r}
+inspect(corpus[1:3])
+```
+
+Ahora construimos un DTM con los textos tratados, **pdf_dtm_clean**.
+  
+```{r}
+pdf_dtm_clean <- DocumentTermMatrix(corpus_clean)
+pdf_dtm_clean
+```
+
+La lista de términos con una frecuencia mínima de 10.
+
+```{r}
+findFreqTerms(pdf_dtm_clean, 10)
+```
+
+Realizamos, de nuevo, el **wordcloud**.
+
+```{r, warning=FALSE, fig.align="center"}
+wordcloud(corpus_clean, min.freq = 10, random.order = FALSE)
+```
+
+Realizamos la misma nube *wordcloud* pero en formato con colores.
+
+```{r, fig.align="center", warning=FALSE}
+# Nube de palabras
+wordcloud(corpus_clean, min.freq = 10, random.order = FALSE, 
+          colors = brewer.pal(8, "Set1"))
+```
+
+Parece que aparte de **servicios**, **articulo** y **medidas** que parecen evidentes, tenemos **locales**, **ley**, 
+**asimilables**, **autoridades**, palabras que podemos asociar con el RD aquí objeto de estudio.
+
+Para ver mas cosas, creamos una matriz TDM.
+
+
+```{r, collapse=TRUE}
+# Obtenemos el TDM
+tdm <- TermDocumentMatrix(corpus_clean)
+
+# Lo convertimos em matriz
+t   <- as.matrix(tdm)
+
+# Ordenamos la matriz
+v   <- sort(t[, 1], decreasing = TRUE)
+
+# Y creamos el objeto como dataframe
+tdm_matriz  <- data.frame(word=names(v), freq=v)
+
+head(tdm_matriz, 10)
+```
+
+Los términos mas frecuentes:
+
+```{r, collapse=TRUE}
+# Encontramos los terminos con una frecuencia superior a 5
+findFreqTerms(tdm, 5)
+```
+
+Visualización gráfica, gráfico de barras:
+
+```{r, fig.align="center"}
+library(RColorBrewer)
+coul <- brewer.pal(5, "Set2")
+
+# Creamos un grafico de barras y nos quedamos con los primeros 15 valores
+barplot(tdm_matriz[1:15, ]$freq,               # Datos
+        las       = 2, 
+        names.arg = tdm_matriz[1:15, ]$word,   # Texto en la x
+        col       = "blue",                    # Color
+        main      = "Palabras mas frecuentes", # Título
+        ylab      = "Apariciones palabras",    # Texto en la y
+        ylim =     c(0, 100))                  # Limitamos el eje y a [0, 100]
+```
+
+### Peso relativo de las palabras con mayor número de aparaciones
+
+Vamos a escoger las primeras 4 palabras en orden de número de apariciones y vamos a ver muy intuitivamente el peso relativo sobre el total de apariciones de todas las palabras.
+
+Preparamos los datos
+
+```{r, eval=FALSE}
+# Prepara los datos para unificar en suma las apariciones de palabras 
+# a partir de la 5º
+
+# Creamos un objeto data frame
+sect           <- data.frame()
+
+# Las primera 10 filas de tdm_matriz, con dos variables word y freq
+sect           <- tdm_matriz[1:4, ]
+
+# Convertimos la variable word a caracter (es de tipo factor)
+sect$word      <- as.character(sect$word)
+
+# Obtenemos los nombres de las filas (los 10 términos mas usados)
+filas          <- rownames(sect)
+
+# Y creamos otro valor que agrupe todo lo que no entra en los 10 primeros
+filas          <- c(filas, "Resto_palabras")
+
+# Incluimos los valores para el elemento 11 en sect. Primero el word, sect[11, 1] 
+sect[5, 1]    <- "Resto_palabras"
+
+# Por último el nombre de las filas
+rownames(sect) <- filas
+```
+
+
+Generamos el gráfico
+
+```{r, fig.align="center", eval=FALSE}
+# Y creo un grafico que llamo sector
+sector <- ggplot(sect, aes(x = "", y = freq, fill = word)) +
+  geom_bar(stat = "identity", width = 1) + 
+  labs(x = "Palabras", y = "Apariciones", fill = "Palabras")
+sector
+```
+![](C:/Users/maria/Desktop/Temario Big Data/12 Text Mining/TextMining/a.jpg)
+
+Consideramos que éste gráfico, sin bien es visualmente llamativo, no es más representativo que los anteriores.
+
+
+### Diccionario
+
+Ahora vamos a crear un diccionario con las palabras con un número mínimo de apariciones de 5.
+
+```{r}
+Dictionary <- function(x) {
+  if( is.character(x) ) {
+    return (x)
+  }
+  stop('x is not a character vector')
+}
+```
+
+
+Aplicamos esa función (Dictionary) a un objeto que agrupe los términos que aparecen al menos 5 veces en pdf_dtm generando el objeto Hay que destacar que estamos usando pdf_dtm y no pdf_dtm_clean.
+
+```{r}
+pdf_dict  <- Dictionary(findFreqTerms(pdf_dtm, 5))
+length(pdf_dict)
+```
+
+Y en pdf_dtm_clean.
+
+```{r}
+pdf_dict_clean  <- Dictionary(findFreqTerms(pdf_dtm_clean, 5))
+length(pdf_dict_clean)
+```
+
+Finalizamos la sesión ofreciendo la información de la misma.
+```{r}
+sessionInfo()
+```
+
+
+### Referencias y Comentarios
+
+**Referencias**
+
+Parte de este código ha sido recopilado de las lecciones del profesor [Santiago Mota](https://www.linkedin.com/in/santiagomota/), Master in Big Data and & Data Science at Complutense University of Madrid, que a su vez ha sido inspirado de la documentación [Join, split, and compress PDF files with pdftools](https://www.r-bloggers.com/join-split-and-compress-pdf-files-with-pdftools/).
+
+**Comentarios**
+
+El presente código ha sido ejecutado en el sistema operativo version Windows 10, 64 bits, escogiendo formato de codificación en RStudio UTF-8.

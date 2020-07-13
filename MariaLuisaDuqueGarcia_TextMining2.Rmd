@@ -1,0 +1,526 @@
+---
+title:    "Text Mining: Extracción de información de documentos Ebooks"
+author:   "by [María Luisa Duque](https://www.linkedin.com/in/marialuisaduque/)"
+mail:     "marialdu@ucm.es"
+linkedin: "marialuisaduque"
+github:   "mlduque"
+date:     "`r Sys.Date()`"
+license:  by-nc-sa
+urlcolor: red
+output:
+  html_document: 
+    theme:        journal # "default", "cerulean", "paper", "flatly", "readable", "spacelab", "united", "cosmo", "lumen", "sandstone", "simplex", "yeti"
+    highlight:    textmate # "default", "tango", "pygments", "kate", "monochrome", "espresso", "zenburn", "haddock", "tango"
+    toc:          TRUE
+    toc_float:    TRUE
+    code_folding: show
+    includes:
+      after_body: footer.html
+  pdf_document:   default
+  epuRate::epurate:
+    number_sections: FALSE
+    code_folding:    "show"
+    toc:          TRUE 
+    word_document:  default
+  rmdformats::readthedown:
+    toc:          TRUE 
+    toc_float:    TRUE     
+---
+
+
+## Libros del Proyecto Gutemberg: *Veinte poemas para ser leídos en el tranvía* por Oliverio Girondo
+
+Dado el gusto de la autora de la presente tarea por la poesía, vamos a escoger aquí analizar el libro [Veinte poemas para ser leídos en el tranvía](https://www.gutenberg.org/ebooks/58103) con el [gutenbergr package](https://github.com/ropenscilabs/gutenbergr) del [Proyecto Gutemberg](https://www.gutenberg.org/).
+
+Primero, cargamos las librerías necesarias:
+
+```{r librerias, results='hide', message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(WikipediR)
+library(WikipediaR)
+library(jsonlite)
+library(tm)
+library(wordcloud)
+library(ggplot2)
+library(knitr)
+```
+
+```{r, message=FALSE}
+if(!is.element("tidyverse", installed.packages()[, 1]))
+      install.packages("tidyverse", repos = 'http://cran.us.r-project.org')
+library(tidyverse)
+if(!is.element("(gutenbergr", installed.packages()[, 1]))
+      devtools::install_github("ropenscilabs/gutenbergr")
+library(gutenbergr)
+if(!is.element("tidytext", installed.packages()[, 1]))
+      install.packages("tidytext", repos = 'http://cran.us.r-project.org')
+library(tidytext)
+if(!is.element("drlib", installed.packages()[, 1]))
+      devtools::install_github("dgrtwo/drlib") 
+library(drlib)
+if(!is.element("quanteda", installed.packages()[, 1]))
+      install.packages("quanteda", repos = 'http://cran.us.r-project.org')
+library(quanteda)
+if(!is.element("stm", installed.packages()[, 1]))
+      install.packages("stm", repos = 'http://cran.us.r-project.org')
+library(stm)
+```
+
+Sacamos los datos del Proyecto Gutemberg
+
+```{r}
+
+# # Veinte poemas para ser leídos en el tranvía de Oliverio Girondo
+girondo_raw <- gutenberg_download(58103)
+
+# La siguiente parte del texto se incluye para libros que incluyan varias partes
+# En nuestro caso, '20 poemas para ser leídos en el tranvía', aporta muy poco
+girondo <- girondo_raw %>%
+    # Creamos una columna nueva, story, que inicialmente es igual a text
+    mutate(story = text) %>%
+  
+    fill(story) %>%
+    filter(story != "20 POEMAS PARA SER LEÍDOS EN EL TRAVÍA") %>%
+    mutate(story = factor(story, levels = unique(story)))
+
+girondo
+```
+
+También, podríamos usar la función kable, en lugar de table, nos muestra las primeras 10 filas.
+
+```{r}
+kable(head(girondo))
+```
+Summary.
+
+```{r}
+kable(summary(girondo))
+```
+
+Structure o str.
+
+```{r}
+kable(str(girondo))
+```
+
+Obtenemos las stopwords del paquete **stopwords** en castellano/español.
+
+```{r}
+# Creamos el dataframe stopwords_es
+stopwords_es <- as.data.frame(stopwords::stopwords("es"))
+
+# Cambiamos de nombre a la variables
+names(stopwords_es) <- "word"
+
+# Vemos las stopwords
+stopwords_es
+```
+308 stopwords.
+
+Vamos a incluir algunos terminos más.
+
+```{r}
+# Creamos un data.frame con otras palabras
+otras_palabras <- data.frame(word = c("cuantos", "posibles", "si", "tan", "aquí",
+                                      "pues", "ay", "tras", "mientras", "las")) # Podemos incluir los que veamos necesarios
+
+# Y con rbind, lo unimos al que teníamos
+stopwords_es <- rbind(stopwords_es, otras_palabras)
+```
+
+Pasamos a formato tbl, es el formato que utiliza dplyr.
+
+```{r}
+stopwords_es_tbl<- as.tbl(stopwords_es)
+```
+
+Vamos a transformar el texto con la función unnest_tokens(). Además, vamos a utilizar la función stopwords.
+
+```{r}
+tidy_girondo <- girondo %>%
+    # Incluimos una columna, line, con el número de línea
+    mutate(line = row_number()) %>%
+  
+    # Aplicamos unnest_tokens()
+    unnest_tokens(word, text) %>%
+    # anti_join(stop_words)
+    # anti_join(stopwords(language = "es"))
+  
+    # Quitamos las stopwords  
+    anti_join(stopwords_es_tbl, by ="word")
+```
+
+```{r}
+tidy_girondo %>%
+    # Contamos word
+    count(word, sort = TRUE)
+```
+
+"Imagen", "mujeres" y "ojos" son los terminos que aparecen mayor número de veces. Comprobemos este hecho generando una nube de palabras. 
+
+### Wordcloud
+
+Para poder generar un *wordcloud*, en este caso con mínima frecuencia de aparición igual a 5, debemos generar primero el corpus y aplicar *tm*, un poco de limpieza.
+
+```{r}
+corpus <- Corpus(VectorSource(girondo_raw), readerControl = list(language = "es"))
+corpus
+```
+
+Quitamos los espacios en blanco:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, stripWhitespace)
+```
+
+Quitamos las stopwords en español:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeWords, stopwords('es'))
+```
+
+Quitamos el resto de signos de puntuación que queden, con la opción **removePuntuation**:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removePunctuation)
+```
+
+Eliminamos los números:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeNumbers) 
+```
+
+Quitamos 'las' y 'mientras' no incluida como stopword:
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeWords, "las") 
+```
+
+```{r, warning=FALSE}
+corpus <- tm_map(corpus, removeWords, "mientras") 
+```
+
+**WordCloud**.
+
+```{r, fig.align="center", warning=FALSE}
+wordcloud(corpus, min.freq = 5, random.order = FALSE, colors = brewer.pal(8, "Set2"))
+```
+
+
+*Mujeres, imagen, ojos, ciudad, mar, vereda, bella, chicas, sol, senos, julio, brazos, olor* son las palabras que aparecen con una frencuencia mímina de 8. Palabras cargadas de un gran contenido sensorial, poético, sensual (proveniente de los sentidos), como era de esperar.
+
+
+### Topic model
+
+Pasamos al topic model. Vamos a identificar los temas principales dentro del texto a ser posible de forma automática (aprendizaje no supervisado).
+
+Vamos a empezar creando el dfm para poder usar la función stm después.
+
+```{r}
+girondo_dfm <- tidy_girondo %>%
+    # Contamos por story y por word y ordenamos
+    count(story, word, sort = TRUE) %>%
+  
+    # Y convertimos en un objeto dfm con la función cast_dfm
+    cast_dfm(story, word, n)
+```
+
+```{r}
+class(girondo_dfm)
+```
+
+```{r}
+girondo_sparse <- tidy_girondo %>%
+    # Contamos por story y por word y ordenamos
+    count(story, word, sort = TRUE) %>%
+  
+  
+    cast_sparse(story, word, n)
+```
+
+Tenemos una matriz tipo sparse en la que hemos separado la lista de terminos y las palabras donde aparecen.
+Realizamos esta conversión a matriz tipo sparse porque es el formato solicitado por la función stm.
+
+```{r}
+class(girondo_sparse)
+```
+
+Para hacer el topic modeling, la función **stm** es la que realiza todo el trabajo, le decimos cuantos bloques K queremos (o k grupos, es basicamente como un k-means aplicado a este tratamiento de textos), en nuestro caso 6.
+
+```{r}
+topic_model <- stm(girondo_dfm, K = 6, verbose = FALSE, init.type = "Spectral")
+```
+Vemos el summary del resultado.
+
+```{r}
+summary(topic_model)
+```
+Nos ha divido en 6 grupos, los 6 grupos más parecidos, habría que entender el sentido de porqué ha escogido los terminos en cada unos de estos grupos, el sentido común.
+
+Vamos a verlo de forma gráfica.
+
+```{r}
+# Creamos un td_beta como tidy tibble de topic_model
+td_beta <- tidy(topic_model)
+
+# Vemos la clase
+class(td_beta)
+```
+
+```{r, fig.align="center"}
+td_beta %>%
+  
+    # Agrupamos por topic
+    group_by(topic) %>%
+  
+    # Nos quedamos con los top n (10) sobre el valor de beta  
+    top_n(10, beta) %>%
+  
+    # Desagrupamos
+    ungroup() %>%
+  
+    # Cambiamos y reordenamos. Tres columnas: topic, term, beta
+    mutate(topic = paste0("Topic ", topic),
+           term = reorder_within(term, beta, topic)) %>%
+  
+    # Creamos un gráfico  
+    ggplot(aes(term, beta, fill = as.factor(topic))) +
+    geom_col(alpha = 0.8, show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free_y") +
+    coord_flip() +
+    scale_x_reordered() +
+    labs(x        = NULL, 
+         y        = expression(beta),
+         title    = "Palabras con mayores probabilidades para cada tema",
+         subtitle = "Diferentes palabras se asocian a diferentes temas")
+```
+
+De forma gráfica, parece observarse, los grupos 1, 2, 3 y 4 son muy parecidos. Los Topic5 y Topic6 parecen más diferentes.
+
+Lo hacemos para cuatro grupos, k=4.
+
+```{r}
+topic_model <- stm(girondo_dfm, K = 4, verbose = FALSE, init.type = "Spectral")
+
+# Creamos un td_beta como tidy tibble de topic_model
+td_beta <- tidy(topic_model)
+
+# Vemos la clase
+class(td_beta)
+```
+
+```{r, fig.align="center"}
+td_beta %>%
+  
+    # Agrupamos por topic
+    group_by(topic) %>%
+  
+    # Nos quedamos con los top n (10) sobre el valor de beta  
+    top_n(10, beta) %>%
+  
+    # Desagrupamos
+    ungroup() %>%
+  
+    # Cambiamos y reordenamos. Tres columnas: topic, term, beta
+    mutate(topic = paste0("Topic ", topic),
+           term = reorder_within(term, beta, topic)) %>%
+  
+    # Creamos un gráfico  
+    ggplot(aes(term, beta, fill = as.factor(topic))) +
+    geom_col(alpha = 0.8, show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free_y") +
+    coord_flip() +
+    scale_x_reordered() +
+    labs(x        = NULL, 
+         y        = expression(beta),
+         title    = "Palabras con mayores probabilidades para cada tema",
+         subtitle = "Diferentes palabras se asocian a diferentes temas")
+```
+
+Ahora parece tener incluso menos sentido que antes. Los grupos son incluso más parecidos.
+
+### Análisis de sentimiento
+
+A continuación, vamos a tratar de clasificar las palabras de la obra tratada en función de si una palabra es positiva o negativa, o si está relacionada con el conjunto de emociones humanas básicas. El análisis de sentimientos funciona en unigramas, palabras simples, pero puede agregarse en varias palabras para ver los sentimientos en un texto.
+
+El paquete **tidytext** R tiene 4 métodos diferentes de análisis de sentimientos (AFINN, Bing, Loughran y Nrc). El léxico NRC, clasifica las palabras en ocho emociones básicas (ira, miedo, anticipación, confianza, sorpresa, tristeza, alegría y asco), así como sentimientos positivos o negativos.
+
+Primero, vamos a un marco de datos de nuestros 4 léxicos.
+
+```{r}
+new_sentiments <- sentiments %>%
+  group_by(sentiment) %>%
+  mutate(words_in_lexicon = n_distinct(word)) %>%
+  ungroup()
+```
+
+Ahora, observamos como de bien coinciden los 4 léxicos con las palabras del texto.
+
+```{r}
+my_kable_styling <- function(dat, caption) {
+  kable(dat, "html", escape = FALSE, caption = caption) %>%
+    kable_styling(bootstrap_options = c("striped", "condensed", "bordered"),
+                  full_width = FALSE)
+}
+```
+
+```{r}
+library(kableExtra)
+library(formattable)
+library(yarrr)
+
+# tidy_hc %>%
+#   mutate(words_in_lyrics = n_distinct(word)) %>%
+#   inner_join(new_sentiments) %>%
+#   group_by(lexicon, words_in_lyrics, words_in_lexicon) %>%
+#   summarise(lex_match_words = n_distinct(word)) %>%
+#   ungroup() %>%
+#   mutate(total_match_words = sum(lex_match_words),
+#          match_ratio = lex_match_words/words_in_lyrics) %>%
+#   select(lexicon, lex_match_words, words_in_lyrics, match_ratio) %>%
+#   mutate(lex_match_words = color_bar("lightblue")(lex_match_words),
+#          lexicon = color_tile("lightgreen","lightgreen")(lexicon)) %>%
+#   my_kable_styling(caption = "Lyrics Found In Lexicons")
+
+tidy_girondo %>%
+  mutate(words_in_lyrics = n_distinct(word)) %>%
+  inner_join(new_sentiments) %>%
+  group_by(sentiment, words_in_lyrics, words_in_lexicon) %>%
+  summarise(lex_match_words = n_distinct(word)) %>%
+  ungroup() %>%
+  mutate(total_match_words = sum(lex_match_words),
+         match_ratio = lex_match_words/words_in_lyrics) %>%
+  select(sentiment, lex_match_words, words_in_lyrics, match_ratio) %>%
+  mutate(lex_match_words = color_bar("lightblue")(lex_match_words),
+         sentiment = color_tile("lightgreen","lightgreen")(sentiment)) %>%
+  my_kable_styling(caption = "Words Found In Lexicons")
+```
+
+Vamos a usar NRC para clasificar el texto por sentimientos.
+
+
+```{r}
+girondosentiment <- tidy_girondo %>%
+  inner_join(get_sentiments("nrc"), by = "word")
+
+girondosentiment
+```
+
+
+Visualizamos el recuento de las diferentes emociones y sentimientos en el léxico NRC.
+
+```{r, fig.align="center"}
+theme_poem <- function(aticks = element_blank(),
+                         pgminor = element_blank(),
+                         lt = element_blank(),
+                         lp = "none")
+{
+  theme(plot.title = element_text(hjust = 0.5), #Center the title
+        axis.ticks = aticks, #Set axis ticks to on or off
+        panel.grid.minor = pgminor, #Turn the minor grid lines on or off
+        legend.title = lt, #Turn the legend title on or off
+        legend.position = lp) #Turn the legend on or off
+}
+
+girondosentiment %>%
+  group_by(sentiment) %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(sentiment, word_count, fill = -word_count)) +
+  geom_col() +
+  guides(fill = FALSE) +
+  theme_minimal() + theme_poem() +
+  labs(x = NULL, y = "Word Count") +
+  ggtitle("Veinte poemas para ser leídos en el tranvía de Girondo NRC Sentiment Totals") +
+  coord_flip()
+```
+
+
+La mayoría de las palabras parecen tener un valor negativo. Veamos con qué sentimiento coinciden las palabras de modo individualizado.
+
+
+```{r, fig.align="center"}
+library(ggrepel)
+
+plot_words <- girondosentiment %>%
+  group_by(sentiment) %>%
+  count(word, sort = TRUE) %>%
+  arrange(desc(n)) %>%
+  ungroup()
+
+plot_words %>%
+  ggplot(aes(word, 1, label = word, fill = sentiment)) +
+  geom_point(color = "white") +
+  geom_label_repel(force = 1, nudge_y = 0.5,
+                   direction = "y",
+                   box.padding = 0.04,
+                   segment.color = "white",
+                   size = 3) +
+  facet_grid(~sentiment) +
+  theme_poem() +
+  theme(axis.text.y = element_blank(), axis.line.x = element_blank(),
+        axis.title.x = element_blank(), axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank(), panel.background = element_blank(),
+        panel.border = element_rect("lightgray", fill = NA),
+        strip.text.x = element_text(size = 9)) +
+  xlab(NULL) + ylab(NULL) +
+  ggtitle("Palabras Veinte poemas para ser leídos en el tranvía de Girondo by NRC Sentiment") +
+  coord_flip()
+```
+
+
+A la vista de los resultados, parece que puede haber palabras que están siendo clasificas erróneamente, por ejemplo, *mar* la clasifica con valor negativo. Centrémonos en una clasificación de valor positivo o negativo unicamente.
+
+
+```{r}
+girondosentiment_index <- tidy_girondo %>%
+  inner_join(get_sentiments("nrc")%>%
+               filter(sentiment %in% c("positive",
+                                       "negative"))) %>%
+  count(index = line, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+```
+
+Vamos a generar un marco de datos que agrega el sentimiento por línea. Veamos la trayectoria que sigue a lo largo del texto, positivo son las barras azules y negativo las rojas. 
+
+```{r, fig.align="center"}
+girondosentiment_index %>%
+  ggplot(aes(index, sentiment, fill = sentiment > 0)) +
+  geom_col(show.legend = FALSE)
+```
+
+Como se muestra en el gráfico expuesto, el texto (poemario) comienza de manera algo neutral (positivo y negativo), con una caída poco después inclinándose a valores negativos. Más de la mitad del poemario es negativo; pero al final toma calidez y positividad.
+
+
+Finalizamos ofreciendo aquí la información de la sesión.
+
+```{r}
+sessionInfo()
+```
+
+
+### Referencias, Links y Comentarios
+
+
+**Referencias**
+
+Parte de este código ha sido recopilado gracias a las lecciones del profesor [Santiago Mota](https://www.linkedin.com/in/santiagomota/), Master in Big Data and & Data Science at Complutense University of Madrid.
+
+
+**Links**
+
+  * Interesante artículo que hace uso de la librería **library(janeaustenr)**, [If I Loved Natural Language Processing Less, I Might Be Able to Talk About It More](https://juliasilge.com/blog/if-i-loved-nlp-less/) por Julia Silge.
+  
+  * [Package ‘janeaustenr' en Cran.](https://cran.r-project.org/web/packages/janeaustenr/janeaustenr.pdf)
+  
+  *[Statistics Sunday: Welcome to Sentiment Analysis with “Hotel California”.](https://www.r-bloggers.com/statistics-sunday-welcome-to-sentiment-analysis-with-hotel-california/)
+
+
+**Comentarios**
+
+El presente código ha sido ejecutado en el sistema operativo version Windows 10, 64 bits, escogiendo formato de codificación en RStudio UTF-8.

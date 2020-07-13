@@ -1,0 +1,630 @@
+---
+title:    "Text Mining: Tweet Sentiment Extraction, Extract support phrases for sentiment labels"
+author:   "by [María Luisa Duque](https://www.linkedin.com/in/marialuisaduque/)"
+mail:     "marialdu@ucm.es"
+linkedin: "marialuisaduque"
+github:   "mlduque"
+date:     "`r Sys.Date()`"
+license:  by-nc-sa
+urlcolor: blue
+output:
+  html_document: 
+    theme:        cosmo # "default", "cerulean", "journal", "flatly", "readable", "spacelab", "united", "cosmo", "lumen", "paper", "sandstone", "simplex", "yeti"
+    highlight:    tango # "default", "tango", "pygments", "kate", "monochrome", "espresso", "zenburn", "haddock", "textmate"
+    toc:          TRUE
+    toc_float:    TRUE
+    code_folding: show
+    includes:
+      after_body: footer.html
+  pdf_document:   default
+  epuRate::epurate:
+    number_sections: FALSE
+    code_folding:    "show"
+    toc:          TRUE 
+    word_document:  default
+  rmdformats::readthedown:
+    toc:          TRUE 
+    toc_float:    TRUE     
+---
+  
+
+# Análisis de un datatset de Kaggle
+
+En este caso vamos a sacar los datos de un dataset de Kaggle sobre análisis de sentimiento en Twitter.
+
+## Los datos
+
+Este análisis está basado en el dataset de Kaggle [Tweet Sentiment Extraction](https://www.kaggle.com/c/tweet-sentiment-extraction/overview).
+
+Vamos a hacer un análisis de sentimiento. 
+
+Primero cargamos librería y los datasets, kaggle ya nos proporciona los datos separados en train y test, podríamos unirlos y hacer esta división pero consideramos dejarla tal y como nos lo proporciona kaggle dado que en el dataset train disponemos de una variable adicional.
+
+En el conjunto de train, se proporciona una palabra o frase extraída del tweet (selected_text) que encapsula el sentimiento proporcionado. En el cojunto de test, sólo encontramos text y no selected_text.
+
+Las variables (columnas) de las que disponemos son:
+
+    * textID - unique ID for each piece of text
+    * text - the text of the tweet
+    * sentiment - the general sentiment of the tweet
+    * selected_text - [train only] the text that supports the tweet's sentiment
+
+
+Cargamos las librerías necesarias:
+
+```{r, warning=FALSE, message=FALSE}
+library(cowplot)
+library(tm)
+library(tidyverse)
+library(stringr)
+# Para la distancia Jaccard 
+library(stringdist)
+# Para el análisis de sentimiento
+#install.packages('sentimentr')
+library(sentimentr)
+# other textmining stuff
+library(wordcloud)
+```
+
+Cargamos los datos.
+
+```{r}
+train <- read.csv('./data/train.csv')
+test <- read.csv('./data/test.csv')
+```
+
+```{r}
+class(train)
+```
+Los dataset son dataframes.
+
+
+Vemos las dimensiones.
+
+```{r}
+dim(train)
+```
+```{r}
+dim(test)
+```
+
+Teniendo en cuenta tanto train como test, tenemos más de 30k datos.
+
+Realicemos un pequeño análisis de los datos.
+
+```{r}
+summary(train) # no hay NAs
+```
+```{r}
+summary(test)
+```
+
+```{r}
+str(train)
+```
+```{r}
+str(test)
+```
+
+Dado que el dataset de train contiene más de 27k obs. y, además, contiene la variable adicional selected_text, consideramos oportuno realizar el análisis de sentimiento sobre este dataset.
+
+Parece que no hay datos NA's, pero comprobemos.
+
+```{r}
+any(is.na(train))
+```
+```{r}
+any(is.na(test))
+```
+
+El sentimiento (sentiment) es nuestra variable objetivo, nuestra target, vamos a verlo en una tabla.
+
+```{r}
+table(train$sentiment)
+```
+```{r}
+table(test$sentiment)
+```
+Parece predominar el sentimiento neutral, luego el positivo y por el último el negativo.
+
+Visualmente, con las funciones del paquete base de R, hacemos un gráfico.
+
+```{r, fig.align="center"}
+plot(table(train$sentiment))
+```
+
+Podemos visualizar con otra librería, ggplot2, mucho mas potente, con una visualización más óptima.
+
+```{r, fig.align="center"}
+library(ggplot2)
+library(gridExtra)
+pie <- ggplot(train, aes(x = factor(1), fill = factor(sentiment))) +
+ geom_bar(width = 1)
+pie + coord_polar(theta = "y")
+```
+
+Visualización con barras.
+
+```{r, fig.align="center"}
+g <- ggplot(train, aes(x = sentiment, fill = factor(sentiment))) +
+ geom_bar()
+g
+```
+
+
+Efectivamente, vemos que predomina el sentimiento neutral y, posteriomente, el positivo.
+
+Podríamos decir que el 40% de los tweets son neutral, el 31% positive y el 28% negative, aproximadamente.
+
+
+## Análisis de Sentimiento
+
+Nuestros datasets ya están divididos en train/test, siendo ambos de clase dataframe.
+El análisis de sentimiento, objetivo de la presente tarea, va a ser realizado sobre los datos de train, como hemos mencionado anteriormente.
+
+Pasamos sentiment a factor.
+
+```{r}
+df <- train
+df$sentiment <- as.factor(df$sentiment)
+```
+
+Selección del texto y evaluación de su longitud.
+
+```{r}
+df$text <- as.character(df$text)
+df$selected_text <- as.character(df$selected_text)
+
+df$length <- str_length(df$text) # Introduce una nueva variable, lenght (longitud)
+df$length_sel <- str_length(df$selected_text) # Introduce una nueva variable, lenght_sel (longitud de selected_text)
+```
+
+Eliminamos las entradas vacías. Los tweets que no tengo longitud mayor a 0 (al menos un caracter escrito).
+
+```{r}
+df <- dplyr::filter(df, length > 0)
+```
+
+Exploramos la longitud del texto frente a la frencuencia. Recordad que el número de caracteres máximo permitidos en Twitter es 280.
+
+```{r}
+summary(df$length)
+```
+```{r}
+hist(df$length, main='Longitud de Text - Training Set')
+```
+```{r}
+boxplot(df$length)
+```
+
+
+Podríamos decir que los tweets con mayor frecuencia, sobre text, son los que se sitúan en un número de caracteres entre 40-50; es decir, la mediana se situaría entre 40-50. La media se sitúa en 68,35. 
+
+Exploramos la longitud del texto seleccionado, selected_text. La variable selected_text, recordemos, encapsula el sentimiento proporcionado.
+
+```{r}
+summary(df$length_sel)
+```
+```{r}
+hist(df$length_sel, main='Longitud Selected Text - Training Set')
+```
+```{r}
+boxplot(df$length_sel)
+```
+Sobre selected_text la media se sitúa en 36,72. Y la mediana estaría situada entre 0-10.
+
+Podríamos decir que las palabras requeridas para encapsular el sentimiento del texto no son muchas, es decir, son pocas las palabras requeridas para evaluar el sentimiento (positivo, negativo, neutral) del texto/tweet completo. Realicemos el ratio.
+
+```{r}
+df$length_ratio <- df$length_sel / df$length # Introduce una nueva variable, lenght_ratio
+summary(df$length_ratio)
+```
+```{r}
+hist(df$length_ratio, main='Ratio de Longitud Selected Text vs Full Text')
+```
+
+La media del ratio se sitúa en 0,583509.
+Y en cuanto a la moda, las palabras que encapsulan el mismo son, con mayor frecuencia, la que albergan todos los caracteres.
+
+### Evaluación del comienzo y el final de la subcadena
+
+Búsqueda de la posición inicial y final de selected_text.
+
+Definimos las funciones y variables necesarias.
+
+```{r}
+fun_find_first <- function(text, subtext) {
+  foo <- stringr::str_locate(text, fixed(subtext))
+  return(foo[1])
+}
+
+fun_find_second <- function(text, subtext) {
+  foo <- stringr::str_locate(text, fixed(subtext))
+  return(foo[2])
+}
+
+n <- nrow(df)
+as <- 1:n
+bs <- 1:n
+
+for (i in 1:n) {
+  # print(i)
+  text <- df$text[i]
+  subtext <- df$selected_text[i]
+  a <- fun_find_first(text, subtext)
+  b <- fun_find_second(text, subtext)
+  as[i] <- a
+  bs[i] <- b
+}
+
+# Introducimos las variables begin, end, begin_rel y end_rel (relativas)
+df$begin <- as
+df$end <- bs
+
+df$begin_rel <- df$begin / df$length
+df$end_rel <- df$end / df$length
+```
+
+Begin indica en qué caracter comienza selected_text de text. End, en qué caracter finaliza selected_text de text. Begin_rel y end_rel es la diferencia o ratio entre la variables begin y end con lenght.
+
+Visualizaciones.
+
+Inicio relativo.
+
+```{r}
+summary(df$begin_rel)
+```
+```{r}
+boxplot(df$begin_rel)
+```
+
+Selected_text comienza al inicio de text, en los primeros caracteres generalmente.
+
+```{r}
+hist(df$begin_rel, main='Posición relativa de inicio en selected text')
+```
+
+```{r}
+summary(df$end_rel)
+```
+```{r}
+boxplot(df$end_rel)
+```
+
+Selected_text finaliza generalmente hacia el final de text, en los últimos caracteres.
+
+```{r}
+hist(df$end_rel, main='Posición relativa de final en selected text')
+```
+
+En realidad, estos gráficos no nos aportan gran información, pero pueden ser de interés. Inicio y final de selected_text muy próximo a incio y final de text, en general.
+
+### Distancia Jaccard
+
+El índice de Jaccard o coeficiente de Jaccard mide el grado de similitud entre dos conjuntos, sea cual sea el tipo de elementos.
+
+Siempre toma valores entre 0 y 1, correspondiente este último a la igualdad total entre ambos conjuntos. 
+
+```{r}
+# Introduce una nueva variable, jac
+df$jac <- stringdist::stringdist(df$text, df$selected_text, method='jaccard')
+summary(df$jac)
+```
+
+Histograma.
+
+```{r}
+hist(df$jac, 100, main='Distancia Jaccard selected vs full text')
+```
+
+La media se sitúa en 0,3173. Moda en cero (histograma).
+Los conjuntos no son similares.
+
+
+### Re-evaluación del análsis de sentimiento
+
+Generamos un dataframe, table, llamado sentiment_train con el id por elemento, el conteo de palabras, la desviación típica y ave_sentiment. Sentiment_by usa un algoritmo que aproxima el sentimiento (polaridad) del texto agrupando variables. 
+
+Ave_sentiment es el promedio de puntuación de sentimiento/polaridad promedio de agrupación. Es decir, si es negativo, el sentimiento es negativo, si es positivo, indica sentimiento positivo (lo vamos a definir como score_sentiment).
+
+Word_count es el recuento de palabras sumado por variable de agrupación.
+
+Sobre text.
+
+```{r}
+sentiment_train <- sentimentr::sentiment_by(get_sentences(df$text))
+
+# Se introduce en df las variables word_count y sentiment_score
+df$sentiment_score <- sentiment_train$ave_sentiment
+df$word_count <- sentiment_train$word_count
+
+head(sentiment_train,10)
+```
+
+
+Sobre selected_text, realizamos lo mismo.
+
+```{r}
+sentiment_train_sel <- sentimentr::sentiment_by(get_sentences(df$selected_text))
+
+# Se introduce en df las variables word_count_sel y sentiment_score_sel
+df$sentiment_score_sel <- sentiment_train_sel$ave_sentiment
+df$word_count_sel <- sentiment_train_sel$word_count
+
+head(sentiment_train_sel,10)
+```
+
+Correlación entre el SCORE del sentimiento en selected_text y en el texto completo.
+
+```{r}
+sent_cor = round(cor(df$sentiment_score, df$sentiment_score_sel),3)
+plot(df$sentiment_score, df$sentiment_score_sel, col='#00000040', pch=16,
+     main=paste0('Sentimiento en selected text vs full text; cor=',sent_cor))
+grid()
+```
+
+La correlación es perfecta, igual a 1, entre sentiment_score y sentiment_score_sel.
+
+### Análisis por cada sentimiento
+
+Realicemos ahora un análisis por cada uno de los sentimientos (positivo, negativo y neutral). Definamos stats_train con 13 variables (medias principalmente, y una mediana).
+
+```{r}
+stats_train <- dplyr::group_by(df, sentiment) %>% summarise(n=n(),
+                                                            mean_words = mean(word_count),
+                                                            mean_words_sel = mean(word_count_sel),
+                                                            mean_length = mean(length),
+                                                            mean_length_sel = mean(length_sel),
+                                                            mean_ratio = mean(length_ratio),
+                                                            median_ratio = median(length_ratio),
+                                                            mean_begin_rel = mean(begin_rel),
+                                                            mean_end_rel = mean(end_rel),
+                                                            mean_jac = mean(jac),
+                                                            mean_sentiment_score = mean(sentiment_score),
+                                                            mean_sentiment_score_sel = mean(sentiment_score_sel)
+)
+stats_train <- as.data.frame(stats_train)
+
+# Resultado
+stats_train
+```
+
+Esta tabla es muy interesante, nos da una información muy relevante, bien contenida, bien resumida y muy ilustrativa de nuestro análisis hasta el momento. Un dato que nos parece de relevancia comentar es mean_ratio y median_ratio, en el sentimiento neutral es igual a 1 (mediana) y 0,96 (media); es decir, la longitud de selected_text/longitud de text es en la mayoría de las ocasiones igual a 1 para el setimiento neutral, se usa aquí todo el texto (en este sentimiento), y no pocas palabras de text para definirlo (hecho que sí ocurre para el sentimiento negativa y positivo con mean_ratio de 0,3).
+
+Definimos ahora, separemos más bien por cada uno de los sentimientos.
+
+```{r}
+df_train_neutral <- dplyr::filter(df, sentiment=='neutral')
+df_train_positive <- dplyr::filter(df, sentiment=='positive')
+df_train_negative <- dplyr::filter(df, sentiment=='negative')
+```
+
+Visualización de las funciones de distribución acumulada de la longitud por sentimientos (ecdf, Empirical Cumulative Distribution Function).
+
+En text.
+
+```{r}
+plot(ecdf(df_train_negative$length), col='red', main='Training - Longitud de text por sentimiento', xlab='Length of Text')
+plot(ecdf(df_train_positive$length), col='green', add=TRUE)
+plot(ecdf(df_train_neutral$length), col='blue', add=TRUE)
+grid()
+legend('topleft', text.width=25, legend=c('Negative','Positive','Neutral'), col=c('red','green','blue'), pch=16)
+```
+
+Los tres sentimiento siguen una distribución acumulada muy parecida. 
+
+En selected_text.
+
+```{r}
+plot(ecdf(df_train_negative$length_sel), col='red', main='Training - Longitud de selected text por sentimiento', xlab='Length of Selected Text')
+plot(ecdf(df_train_positive$length_sel), col='green', add=TRUE)
+plot(ecdf(df_train_neutral$length_sel), col='blue', add=TRUE)
+grid()
+legend('topleft', text.width=25, legend=c('Negative','Positive','Neutral'), col=c('red','green','blue'), pch=16)
+```
+
+Vemos aquí una diferencia en selected_text con respecto a text. Observamos que la distribución acumulada en los sentimiento positivo y negativo tiene mayor pendiente que en el caso del sentimiento neutral.
+
+
+Visualicemos el ratio selected_text/text.
+
+```{r}
+plot(ecdf(df_train_negative$length_ratio), col='red', main='Training - Ratio Longitud Selected/Text Completo', xlab='Ratio')
+plot(ecdf(df_train_positive$length_ratio), col='green', add=TRUE)
+plot(ecdf(df_train_neutral$length_ratio), col='blue', add=TRUE)
+grid()
+legend('topleft', text.width=0.2, legend=c('Negative','Positive','Neutral'), col=c('red','green','blue'), pch=16)
+```
+
+Vemos que en el ratio correspondiente al sentimiento neutral, parece que la logitud acumulada tiene un recorrido muy distinto al del otro par de sentimientos. Anteriormente, había visto que para el sentimiento neutral, mean_ratio era de 0,96 y median_ratio igual a 1.
+
+Histogramas por sentimientos.
+
+En text.
+
+```{r}
+hist(df_train_neutral$sentiment_score, 50, col='blue', main='Sentimiento Score - Sentimientot=Neutral')
+```
+```{r}
+hist(df_train_positive$sentiment_score, 50, col='green', main='Sentimiento Score - Sentimiento=Positive')
+```
+```{r}
+hist(df_train_negative$sentiment_score, 50, col='red', main='Sentimiento Score - Sentimiento=Negative')
+```
+
+Como cabía esperar, y hemos apuntado anteriormente al indicar el significado de la variable sentiment_score (si se positivo, tendrá valor positivo, si es negativo, negativo y si es neutral se situara entorno al valor 0) la frecuencia en el sentimiento neutral se sitúa entorno al valor 0, la frecuencia en el sentimiento positivo en valores mayores que cero y la frecuencia en el sentimiento negativo, valores menores a 0.
+
+```{r}
+hist(df_train_positive$sentiment_score_sel, 50, col='darkgreen', main='Sentimiento Score Selected Text - Sentimiento=Positive')
+```
+
+```{r}
+hist(df_train_negative$sentiment_score_sel, 50, col='darkred', main='Sentimiento Score Selected Text - Sentimiento=Negative')
+```
+
+En la visualización del histograma sobre selected_text del score por sentimiento, ocurre lo mismo que lo descrito sobre text; sin embargo, observamos picos de frecuencia más pronunciados.
+
+SmoothScatters de la longitud por cada sentimiento, es un scatterplot pero suavizado, una nube de puntos más suavizada.
+
+```{r}
+smoothScatter(df_train_negative$length, df_train_negative$length_sel, xlab='Longitud Text', ylab='Longitud Selected Text',
+              main='Training - Sentimiento Negative')
+```
+```{r}
+smoothScatter(df_train_positive$length, df_train_positive$length_sel, xlab='Longitud Text', ylab='Longitud Selected Text',
+              main='Training - Sentimiento Positive')
+```
+```{r}
+smoothScatter(df_train_neutral$length, df_train_neutral$length_sel, xlab='Longitud Text', ylab='Longitud Selected Text',
+              main='Training - Sentimiento Neutral')
+```
+
+Estos scatterplots están en sintonía con lo mencionado anteriormente y lo observado en la tabla stats_train, para el sentimiento neutral, selected_text y text son de longitud practicamente coincidente.
+
+Veamos gráficos de correlaciones.
+
+```{r}
+sent_cor = round(cor(df_train_neutral$sentiment_score, df_train_neutral$sentiment_score_sel),3)
+plot(df_train_neutral$sentiment_score, df_train_neutral$sentiment_score_sel, col='#0000ff40', pch=16,
+     main=paste0('NEUTRAL - Sentimiento selected text vs text completo; cor=',sent_cor))
+grid()
+```
+
+La correlación del score para neutral en text y selected_text es de 0,97; positiva y fuerte (lineal).
+
+```{r}
+sent_cor = round(cor(df_train_positive$sentiment_score, df_train_positive$sentiment_score_sel),3)
+plot(df_train_positive$sentiment_score, df_train_positive$sentiment_score_sel, col='#00990040', pch=16,
+     main=paste0('POSITIVE - Sentimiento selected text vs text completo; cor=',sent_cor))
+grid()
+```
+
+La correlación del score para positive en selected_text y text es de 0,527, positiva, muy concentrada entre 0 y 0,5; es decir, es una relación no muy fuerte ya que la nube de puntos tiene una tendencia elíptica o circular, la relación es más bien débil.
+
+```{r}
+sent_cor = round(cor(df_train_negative$sentiment_score, df_train_negative$sentiment_score_sel),3)
+plot(df_train_negative$sentiment_score, df_train_negative$sentiment_score_sel, col='#99000040', pch=16,
+     main=paste0('NEGATIVE - Sentimiento selected text vs text completo; cor=',sent_cor))
+grid()
+```
+
+La correlación del score para negative en selected_text y text es de 0,557, positiva, muy concentrada entre -0.5 y 0; es decir, es una relación no muy fuerte ya que la nube de puntos tiene una tendencia elíptica o circular, la relación es más bien débil.
+
+
+Histogramas distancia Jaccard por cada sentimiento (negativo, positivo y neutral).
+
+```{r}
+hist(df_train_negative$jac,100, main='NEGATIVE - Jaccard distance selected vs full text', col='red')
+```
+```{r}
+hist(df_train_positive$jac,100, main='POSITIVE - Jaccard distance selected vs full text', col='green')
+```
+```{r}
+hist(df_train_neutral$jac,100, main='NEUTRAL - Jaccard distance selected vs full text', col='blue')
+```
+```{r, message=FALSE}
+hist(df_train_neutral$jac[df_train_neutral$jac>0],100, main='NEUTRAL - Jaccard distance selected vs full text - sin ceros', col='blue')
+```
+
+
+Como hemos mencionado anteriormente, los conjuntos text y selected_text no son similares en cuanto a longitud de caracteres.
+
+### Wordclouds por Sentimiento
+
+**Sentimiento Negativo:**
+
+ETL y construcción del corpus.
+
+```{r, message=FALSE, warning=FALSE}
+my_corpus <- tm::VCorpus(tm::VectorSource(df_train_negative$text))
+# tidy text
+my_corpus <- tm::tm_map(my_corpus, tm::removePunctuation)
+my_corpus <- tm::tm_map(my_corpus, tm::content_transformer(tolower))
+my_corpus <- tm::tm_map(my_corpus, removeWords, stopwords("english"))
+my_corpus <- tm::tm_map(my_corpus, stemDocument)
+# plot wordcloud
+wordcloud::wordcloud(my_corpus, max.words=250, random.order=FALSE, color=rainbow(100))
+```
+
+Para el sentimiento negativo pero selecionando sólo selected_text.
+
+```{r, message=FALSE}
+my_corpus <- tm::VCorpus(tm::VectorSource(df_train_negative$selected_text))
+# tidy text
+my_corpus <- tm::tm_map(my_corpus, tm::removePunctuation)
+my_corpus <- tm::tm_map(my_corpus, tm::content_transformer(tolower))
+my_corpus <- tm::tm_map(my_corpus, removeWords, stopwords("english"))
+my_corpus <- tm::tm_map(my_corpus, stemDocument)
+# plot wordcloud
+wordcloud::wordcloud(my_corpus, max.words=250, random.order=FALSE, color=rainbow(100))
+```
+
+
+Palabras como *miss, sad, hate, can't, suck, bad, bore, dont, work, now, day* son algunas de las que más se mencionan en este sentimiento negativo. 
+
+**Sentimiento Positivo:**
+
+En Text.
+
+```{r, message=FALSE}
+my_corpus <- tm::VCorpus(tm::VectorSource(df_train_positive$text))
+# tidy text
+my_corpus <- tm::tm_map(my_corpus, tm::removePunctuation)
+my_corpus <- tm::tm_map(my_corpus, tm::content_transformer(tolower))
+my_corpus <- tm::tm_map(my_corpus, removeWords, stopwords("english"))
+my_corpus <- tm::tm_map(my_corpus, stemDocument)
+# plot wordcloud
+wordcloud::wordcloud(my_corpus, max.words=250, random.order=FALSE, color=rainbow(100))
+```
+
+En selected_text.
+
+```{r, message=FALSE}
+my_corpus <- tm::VCorpus(tm::VectorSource(df_train_positive$selected_text))
+# tidy text
+my_corpus <- tm::tm_map(my_corpus, tm::removePunctuation)
+my_corpus <- tm::tm_map(my_corpus, tm::content_transformer(tolower))
+my_corpus <- tm::tm_map(my_corpus, removeWords, stopwords("english"))
+my_corpus <- tm::tm_map(my_corpus, stemDocument)
+# plot wordcloud
+wordcloud::wordcloud(my_corpus, max.words=250, random.order=FALSE, color=rainbow(100))
+```
+
+Palabras como *good, love, happi, thank, day, great, hope, like, lol, mother, nice, fun, awesome* son algunas de las destacadas para el sentimiento positivo. 
+
+
+**Sentimiento Neutral:**
+
+En text. No lo vamos a realizar sobre selected_text puesto que no se diferencian mucho, como hemos dicho en varias ocasiones anteriormente.
+
+```{r, message=FALSE, warning=FALSE}
+my_corpus <- tm::VCorpus(tm::VectorSource(df_train_neutral$text))
+# tidy text
+my_corpus <- tm::tm_map(my_corpus, tm::removePunctuation)
+my_corpus <- tm::tm_map(my_corpus, tm::content_transformer(tolower))
+my_corpus <- tm::tm_map(my_corpus, removeWords, stopwords("english"))
+my_corpus <- tm::tm_map(my_corpus, stemDocument)
+# plot wordcloud
+wordcloud::wordcloud(my_corpus, max.words=250, random.order=FALSE, color=rainbow(100))
+```
+
+Palabras como *day, work, just, get, now, today, time* son algunas de las que se encuentran en sentmiento neutral, lo cierto que podríamos decir que son palabras vacías sin contexto.
+
+
+Terminamos ofreciendo la información de la sesión.
+
+```{r}
+sessionInfo()
+```
+
+
+## Referencias y Comentarios
+
+**Referencias**
+
+Parte de este código ha sido recopilado de las lecciones del profesor [Santiago Mota](https://www.linkedin.com/in/santiagomota/), Master in Big Data and & Data Science at Complutense University of Madrid. También, otra parte del mismo ha sido inspirado a través de código diverso de los notebooks de Kaggle puestos a disposición por parte de los usuarios inscritos, [aquí.](https://www.kaggle.com/c/tweet-sentiment-extraction/notebooks?sortBy=hotness&group=everyone&pageSize=20&competitionId=16295&language=R)
+
+
+**Comentarios**
+
+El presente código ha sido ejecutado en el sistema operativo version Windows 10, 64 bits, escogiendo formato de codificación en RStudio UTF-8.
